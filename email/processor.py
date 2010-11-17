@@ -222,14 +222,20 @@ class EmailMonitor:
     last_checked = time.localtime()
 
   def init_db( self ):
-    self.db = redis.Redis(host='localhost', port=6379, db=0)
-    self.db.setnx("ids:%s:message" % self.user, 1)
-    self.db.setnx("ids:%s:conversation" % self.user, 1)
-    self.db.setnx("ids:%s:contact" % self.user, 1)
+    self.redis_port = 6379
+    self.redis_host = 'localhost'
+    try:
+      self.db = redis.Redis(host=self.redis_host, port=self.redis_port, db=0)
+      self.db.setnx("ids:%s:message" % self.user, 1)
+      self.db.setnx("ids:%s:conversation" % self.user, 1)
+      self.db.setnx("ids:%s:contact" % self.user, 1)
+    except redis.exceptions.ConnectionError, e:
+      print "check that your redis server is running on %s:%s" % (self.redis_host, self.redis_port)
+      raise e
 
   def __init__( self, user, dir ):
     self.user = user
-    self.directory = dir
+    self.directory = os.path.expanduser(dir)
     self.init_db()
     self.email_processor = EmailProcessor(self.user, self.db)
     self.conversation_processor = ConversationProcessor(self.user, self.db)
@@ -251,7 +257,7 @@ class EmailMonitor:
         processed_files = self.db.smembers("files:%s:%s" % (self.user,path)) or []
         print path, processed_files
         for f in filenames :
-            if not f in processed_files:
+            if not (f in processed_files):
               emails.append({ "file" : f, "path" : os.path.normpath(path)})
 
     self.update_last_checked()
@@ -266,7 +272,7 @@ class EmailMonitor:
 
 if __name__ == "__main__":
   import getpass
-  monitor = EmailMonitor(getpass.getuser(), "Maildir")
+  monitor = EmailMonitor(getpass.getuser(), "~/Maildir")
   
   if ( len(sys.argv) >= 2  and sys.argv[1] == "-d"):
     monitor.run()
