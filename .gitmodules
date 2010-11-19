@@ -1,6 +1,3 @@
-[submodule "lib/journey"]
-	path = lib/journey
-	url = https://github.com/cloudhead/journey.git
 [submodule "lib/node_redis"]
 	path = lib/node_redis
 	url = https://github.com/mranney/node_redis.git
