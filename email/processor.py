@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 import sys, os, time, re
 
 import redis
@@ -27,21 +29,21 @@ class ConversationProcessor:
   def process( self, msg_id ):
 
     conv_id = None
-    known_conversations = []
-    unknown_references = []
+    known_conversations = set()
+    unknown_references = set()
 
     references = self.db.lrange("message:%s:header:%s" % (msg_id, "references"), 0, -1)
     for reference in references:
-      conv_id = self.db.get("message:%s:conversation-id" % (msg_id))
-      if conv_id: conversation.append(conv_id)
-      else: unknown_references.append(msg_id)
+      conv_id = self.db.get("message:%s:conversation-by-header-id" % (reference))
+      if conv_id: known_conversations.add(conv_id)
+      else: unknown_references.add(msg_id)
 
     if len(known_conversations) > 1:
       conv_id = known_conversations.pop()
       for id in known_conversations:
         # merge all references stored in this conversation
-        messages = self.db.smembers("conversation:%s:messages" % id)
-        self.db.sunionstore("conversation:%s:messages" % conv_id, "conversation:%s:messages" % id)
+        messages = self.db.zrange("conversation:%s:messages" % id, 0, -1)
+        self.db.zunionstore("conversation:%s:messages" % conv_id, "conversation:%s:messages" % id)
         self.db.delete("conversation:%s:messages" % id)
 
         # overwrite all the msg header id to conversation id mappings
@@ -50,7 +52,7 @@ class ConversationProcessor:
           self.db.set("message:%s:conversation-by-header-id" % (_msg_header_id), conv_id)
 
         # merge all the msg involves sets
-        self.db.sunionstore("conversation:%s:involves" % conv_id, "conversation:%s:involves" % (id))
+        self.db.sunionstore("conversation:%s:involves" % conv_id, ["conversation:%s:involves" % (id)])
         self.db.delete("conversation:%s:involves" % id)
 
         # merge the timestamps to the latest time
@@ -64,7 +66,7 @@ class ConversationProcessor:
 
         # merge all the specific involvement sets
         for involvement in ["to","cc", "bcc", "from"]:
-          self.db.sunionstore("conversation:%s:%s" % (conv_id, involvement), "conversation:%s:%s" % (id, involvement))
+          self.db.sunionstore("conversation:%s:%s" % (conv_id, involvement), ["conversation:%s:%s" % (id, involvement)])
           self.db.delete("conversation:%s:%s" % (id, involvement))
 
         # delete the conversation from our master list
@@ -77,7 +79,7 @@ class ConversationProcessor:
       # we need to create a new conversation object
       conv_id = self.db.incr("ids:%s:conversation" % self.user)
       utctimestamp = self.db.get("message:%s:utctimestamp" % (msg_id))
-      self.db.zadd("all-conversations:%s" % (self.user), conv_id, utctimestamp)
+      self.db.zadd("all-conversations:%s" % (self.user), utctimestamp, conv_id)
       subject = self.db.lrange("message:%s:header:%s" % (msg_id, "subject"), 0, -1)[0]
       self.db.set("conversation:%s:subject" % (conv_id), subject)
       self.db.set("conversation:%s:utctimestamp" % (conv_id), utctimestamp)
@@ -96,7 +98,10 @@ class ConversationProcessor:
     if msg_utctimestamp > conv_utctimestamp:
       self.db.set("conversation:%s:utctimestamp" % (conv_id), msg_utctimestamp)
       self.db.set("conversation:%s:timestamp" % (conv_id), self.db.get("message:%s:timestamp" % (msg_id)))
-      self.db.zadd("all-conversations:%s" % (self.user), conv_id, msg_utctimestamp)
+      self.db.zadd("all-conversations:%s" % (self.user), msg_utctimestamp, conv_id)
+
+    # Add this message to the conversation time sorted list
+    self.db.zadd("conversation:%s:messages" % conv_id, msg_utctimestamp, msg_id)
 
     # Set all the unknown references to point to our conversation
     for unknown_reference_id in unknown_references:
